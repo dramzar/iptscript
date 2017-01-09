@@ -149,6 +149,7 @@ function get_listenports {
 		ports=$(($ports+1))
 		openpn[$ports]=$pn
 		addport[$ports]="YES"
+		srcnet[$ports]="any"
 
 	done
 
@@ -169,8 +170,9 @@ function get_listenports {
 		clear
 		echo "What input ports should be added to the iptables list?"
 		echo "Here are the ports currently listening for tcp connections:"
+		echo -e "Number: Service (Port)\t\tAdd\tSourcenetwork"
 		for ((i=1; i<$ports; i++)); do
-			echo "$i: ${openpn[$i]}(${openpp[$i]}) [${addport[$i]}]"
+			echo -e "$i:\t${openpn[$i]} (${openpp[$i]})\t\t[${addport[$i]}]\t${srcnet[$i]}"
 		done
 		if [[ $ports == 1 ]]; then
 			echo "No listening ports found..."
@@ -178,16 +180,36 @@ function get_listenports {
 		echo ""
 		echo "$ports: All done."
 		echo ""
-		echo -n "Enter a number to switch if it should be added or not: "
+		echo -n "Enter a number to edit the entry: "
 		read choise
 		if [ $choise -gt 0 -a $choise -le $ports ]; then # Check if the input is within the range. strings will result in a error but should not be visible because of the 'clear' in the begining of the loop
 			if [[ $choise == $ports ]]; then
 				break
 			fi
-			if [[ ${addport[$choise]} == "YES" ]]; then
-				addport[$choise]="NO"
-			else
-				addport[$choise]="YES"
+			echo -e "Service\t\tPort\tAdd\tSourcenetwork"
+			echo -e "${openpn[$choise]}\t\t${openpp[$choise]}\t${addport[$choise]}\t${srcnet[$choise]}"
+			echo ""
+			echo "1: Switch if the enty should be added or not."
+			echo "2: Change the source network."
+			echo "3: Cancel"
+			echo ""
+			echo -n "Choose: "
+			read entry
+			if [ $entry -eq 1 ]; then
+				if [[ ${addport[$choise]} == "YES" ]]; then
+					addport[$choise]="NO"
+				else
+					addport[$choise]="YES"
+				fi
+			elif [ $entry -eq 2 ]; then
+				echo "Please note that no check will be done on the entry so be sure that its a valid network."
+				echo "Blank entry to cancel."
+				echo ""
+				echo -n "New sourece network: "
+				read src
+				if [ ! -z $src ]; then
+					srcnet[$choise]=$src
+				fi
 			fi
 		fi
 	done
@@ -198,15 +220,17 @@ function get_listenports {
 			addport[$i]=${openpp[i]}
 		else
 			addport[$i]=""
+			srcnet[$i]=""
 		fi
 	done
-	addport=${addport[@]} 
+	addport=(${addport[@]}) 
+	srcnet=(${srcnet[@]})
 }
 
 # Checking what init system is used
 initsystem=$(get_initsystem)
 if [[ initsystem == unknown ]]; then
-	echo "Unable to determine what init system is running exiting.
+	echo "Unable to determine what init system is running exiting."
 	exit 100
 fi
 
