@@ -257,8 +257,14 @@ function get_listenports {
 
 # Checking what init system is used
 initsystem=$(get_initsystem)
-if [[ initsystem == unknown ]]; then
+if [[ $initsystem == unknown ]]; then
 	echo "Unable to determine what init system is running exiting."
 	exit 100
+elif [[ $initsystem == upstart ]] ;then
+	echo "Init system is upstart."
+elif [[ $initsystem == systemd ]] ;then
+	echo "Init system is systemd."
+elif [[ $initsystem == sysv-init ]] ;then
+	echo "Init system is sysv-init."
 fi
 
