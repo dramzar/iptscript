@@ -140,6 +140,11 @@ function add_commonrules {
   iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 }
 
+function add_ownrules {
+  for ((i=0; i<${#addport[@]}; i++)); do
+    iptables -A INPUT -p tcp --dport ${addport[$i]}  -s ${srcnet[$i]} -j ACCEPT
+  done
+}
 
 function get_listenports {
 	# Get list of listening ports with name.
@@ -179,36 +184,59 @@ function get_listenports {
 		fi
 		echo ""
 		echo "$ports: All done."
+		echo "0: Add custom port"
 		echo ""
 		echo -n "Enter a number to edit the entry: "
 		read choise
-		if [ $choise -gt 0 -a $choise -le $ports ]; then # Check if the input is within the range. strings will result in a error but should not be visible because of the 'clear' in the begining of the loop
+		if [ $choise -ge 0 -a $choise -le $ports ]; then # Check if the input is within the range. strings will result in a error but should not be visible because of the 'clear' in the begining of the loop
 			if [[ $choise == $ports ]]; then
 				break
-			fi
-			echo -e "Service\t\tPort\tAdd\tSourcenetwork"
-			echo -e "${openpn[$choise]}\t\t${openpp[$choise]}\t${addport[$choise]}\t${srcnet[$choise]}"
-			echo ""
-			echo "1: Switch if the enty should be added or not."
-			echo "2: Change the source network."
-			echo "3: Cancel"
-			echo ""
-			echo -n "Choose: "
-			read entry
-			if [ $entry -eq 1 ]; then
-				if [[ ${addport[$choise]} == "YES" ]]; then
-					addport[$choise]="NO"
-				else
-					addport[$choise]="YES"
+			elif [ $choise -eq 0 ]; then
+				echo -n "Service (empty for 'Custom'): "
+				read name
+				if [ -z $name ]; then
+					name="Custom"
 				fi
-			elif [ $entry -eq 2 ]; then
-				echo "Please note that no check will be done on the entry so be sure that its a valid network."
-				echo "Blank entry to cancel."
-				echo ""
-				echo -n "New sourece network: "
+				echo -n "Port: "
+				read port
+				echo -n "Source network (empty for 'any'): "
 				read src
-				if [ ! -z $src ]; then
-					srcnet[$choise]=$src
+				if [ -z $src ]; then
+					src="any"
+				fi
+
+				# Adding the new port
+				openpn[$ports]=$name
+				openpp[$ports]=$port
+				addport[$ports]="YES"
+				srcnet[$ports]=$src
+
+				((ports+=1)) # Increase the number of ports after adding
+			else # Edit selected rule
+				echo -e "Service\t\tPort\tAdd\tSourcenetwork"
+				echo -e "${openpn[$choise]}\t\t${openpp[$choise]}\t${addport[$choise]}\t${srcnet[$choise]}"
+				echo ""
+				echo "1: Switch if the enty should be added or not."
+				echo "2: Change the source network."
+				echo "3: Cancel"
+				echo ""
+				echo -n "Choose: "
+				read entry
+				if [ $entry -eq 1 ]; then
+					if [[ ${addport[$choise]} == "YES" ]]; then
+						addport[$choise]="NO"
+					else
+						addport[$choise]="YES"
+					fi
+				elif [ $entry -eq 2 ]; then
+					echo "Please note that no check will be done on the entry so be sure that its a valid network."
+					echo "Blank entry to cancel."
+					echo ""
+					echo -n "New sourece network: "
+					read src
+					if [ ! -z $src ]; then
+						srcnet[$choise]=$src
+					fi
 				fi
 			fi
 		fi
@@ -223,7 +251,7 @@ function get_listenports {
 			srcnet[$i]=""
 		fi
 	done
-	addport=(${addport[@]}) 
+	addport=(${addport[@]})
 	srcnet=(${srcnet[@]})
 }
 
@@ -233,5 +261,4 @@ if [[ initsystem == unknown ]]; then
 	echo "Unable to determine what init system is running exiting."
 	exit 100
 fi
-
 
