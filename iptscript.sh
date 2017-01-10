@@ -23,9 +23,10 @@ fi
 ################################
 # Variables
 ################################
-outfolder=/lib/systemd/system/
-service_name=iptables-restore.service
-outfile=${outfolder}${service_name}
+sysmdfolder=/lib/systemd/system/
+sysmdservice=iptables-restore.service
+sysmdfile=${sysmdfolder}${sysmdservice}
+upsfolder=/etc/init/
 restorefile=/etc/iptables.save
 tmpfile=/tmp/iptables.save
 configfile="iptscript.conf"
@@ -57,8 +58,8 @@ fi
 ###############################
 
 function get_initsystem {
-        if [[ '/sbin/init --version' =~ upstart ]]; then echo upstart;
-        elif [[ $(systemctl) == *-.mount* ]]; then echo systemd;
+        if [[ $(/sbin/init --version 2>/dev/null) == *upstart* ]]; then echo upstart;
+        elif [[ $(systemctl 2>/dev/null) == *-.mount* ]]; then echo systemd;
         elif [[ -f /etc/init.d/cron && ! -h /etc/init.d/cron ]]; then echo sysv-init;
         else echo unknown; fi
 }
@@ -85,7 +86,7 @@ ExecStop=$restorefile.sh $restorefile
 WantedBy=multi-user.target"
 ###
 
-  echo "${content}" >$outfile
+  echo "${content}" >$sysmdfile
 
 ##############################
 # BASH File Creation
@@ -104,13 +105,13 @@ while read p; do
         fi
 done <$tmpfile
 
-echo -e \$newtxt > $outfile
-rm $tmpfile"
+echo -e \$newtxt > $restorefile
+rm $tmpfile
+chmod 600 $restorefile"
 ###
 
   echo "${content}" > $restorefile.sh
 
-  echo "chmod 600 $restorefile" >> $restorefile.sh
   chmod 700 $restorefile.sh
 
 ############################
@@ -121,10 +122,53 @@ rm $tmpfile"
   chmod 600 $restorefile
 
   echo "Enabling and starting restore service..."
-  systemctl enable $service_name
-  systemctl start $service_name
+  systemctl enable $sysmdservice
+  systemctl start $sysmdservice
 }
 
+function create_restore_files_upstart {
+##########################
+# Startup script
+##########################
+content="
+# iptables restore script
+
+description     \"restore iptables saved rules\"
+
+start on network or runlevel [2345]
+
+exec /sbin/iptables-restore $restorefile"
+
+echo "${content}" > ${upsfolder}iptables-restore.conf
+
+##########################
+# Shutdown script
+##########################
+content="
+# iptables save script
+
+description     \"save iptables rules\"
+
+start on runlevel [06]
+
+script
+	/sbin/iptables-save > $tmpfile
+	newtxt=''
+
+	while read p; do
+	        if [[ \"\${newtxt#*\$p}\" == \"\$newtxt\" ]]; then
+                	newtxt=\"\${newtxt}\${p}\n\"
+        	fi
+	done <$tmpfile
+
+	echo -e \$newtxt > $restorefile
+	rm $tmpfile
+	chmod 600 $restorefile
+end script"
+
+echo "${content}" > ${upsfolder}iptables-save.conf
+
+}
 function add_commonrules {
   #Drop new incoming tcp packets if they are not SYN
   iptables -A INPUT -p tcp ! --syn -m state --state NEW -j DROP
@@ -268,3 +312,4 @@ elif [[ $initsystem == sysv-init ]] ;then
 	echo "Init system is sysv-init."
 fi
 
+create_restore_files_upstart
