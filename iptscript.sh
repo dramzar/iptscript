@@ -23,6 +23,11 @@ fi
 ################################
 # Variables
 ################################
+inputdrop=true
+outputdrop=true
+getlisteningports=true
+addcommonrules=true
+addhttphttps=true
 sysmdfolder=/lib/systemd/system/
 sysmdservice=iptables-restore.service
 sysmdfile=${sysmdfolder}${sysmdservice}
@@ -68,7 +73,7 @@ function get_initsystem {
 # Function to create the service for systemd
 function create_restore_files_systemd {
 # Service File Creation
-
+  echo "Creating save and restore scripts for systemd."
   echo "Creating service file..."
 
 ###
@@ -130,9 +135,10 @@ function init_sysmd_service {
 
 # Function to create the start and stop script used by upstart
 function create_restore_files_upstart {
-# Startup script
+  # Startup script
 
-content="
+  echo "Creating save and restore scripts for Upstart."
+  content="
 # iptables restore script
 
 description     \"restore iptables saved rules\"
@@ -143,9 +149,9 @@ exec /sbin/iptables-restore $restorefile"
 
 echo "${content}" > ${upsfolder}iptables-restore.conf
 
-# Shutdown script
+  # Shutdown script
 
-content="
+  content="
 # iptables save script
 
 description     \"save iptables rules\"
@@ -154,10 +160,10 @@ start on runlevel [06]
 
 exec $restorefile.sh"
 
-echo "${content}" > ${upsfolder}iptables-save.conf
+  echo "${content}" > ${upsfolder}iptables-save.conf
 
 # Creating Bash file
-content="#!/bin/bash
+  content="#!/bin/bash
 /sbin/iptables-save > $tmpfile
 newtxt=''
 
@@ -171,35 +177,86 @@ echo -e \$newtxt > $restorefile
 rm $tmpfile
 chmod 600 $restorefile"
 
-echo "${content}" > $restorefile.sh
-chmod 700 $restorefile.sh
+  echo "${content}" > $restorefile.sh
+  chmod 700 $restorefile.sh
 }
 
 # Function to add some common rules to iptables
 function add_commonrules {
-  #Drop new incoming tcp packets if they are not SYN
-  iptables -A INPUT -p tcp ! --syn -m state --state NEW -j DROP
-  #Drop fragmented packets
-  iptables -A INPUT -f -j DROP
-  #Drop malformed XMAS packets
-  iptables -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
-  #Drop NULL packets
-  iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
-  #Accept packets comming in on the loopback interface
-  iptables -A INPUT -i lo -j ACCEPT
-  #Accept established or related packets
-  iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+  echo "Adding common rules..."
+
+  if [[ "$inputdrop" == true ]]; then
+    #Accept packets comming in on the loopback interface
+    iptables -A INPUT -i lo -j ACCEPT
+    #Accept DNS lookup responces on udp
+    iptables -A INPUT -p udp --sport 53 -m state --state ESTABLISHED,RELATED -j ACCEPT
+    #Reject new ICMP requests
+    iptables -A INPUT -p icmp --icmp-type echo-request -j REJECT --reject-with icmp-host-unreachable
+    #Accept ICMP responces
+    iptables -A INPUT -p icmp --icmp-type echo-reply -m state --state ESTABLISHED,RELATED -j ACCEPT
+    #Accept established or related tcp packets
+    iptables -A INPUT -p tcp -m state --state ESTABLISHED,RELATED -j ACCEPT
+  elif [[ "$inputdrop" == false ]]; then
+    #Drop new incoming tcp packets if they are not SYN
+    iptables -A INPUT -p tcp ! --syn -m state --state NEW -j DROP
+    #Drop fragmented packets
+    iptables -A INPUT -f -j DROP
+    #Drop malformed XMAS packets
+    iptables -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
+    #Drop NULL packets
+    iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
+    #Reject new ICMP requests
+    iptables -A INPUT -p icmp --icmp-type echo-request -j REJECT --reject-with icmp-host-unreachable
+  fi
+
+  if [[ "$outputdrop" == true ]]; then
+    #Accept all packets on the loopback interface
+    iptables -A OUTPUT -o lo -j ACCEPT
+    #Accept DNS lookup requests on udp
+    iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+    #Accept new ICMP requests
+    iptables -A OUTPUT -p icmp --icmp-type echo-request -j ACCEPT
+    #Accept all packets from established or related sessions
+    iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+  fi
 }
 
 # Function to add the rules added by the get_listenports and user
 function add_ownrules {
+  echo "Adding user defined rules..."
+
   for ((i=0; i<${#addport[@]}; i++)); do
     iptables -A INPUT -p tcp --dport ${addport[$i]}  -s ${srcnet[$i]} -j ACCEPT
   done
 }
+# function to add OUTPUT rules to allow HTTP and HTTPS
+function add_httphttps_rules {
+  echo "Adding HTTP and HTTPS OUTPUT rules..."
+
+  iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
+  iptables -A OUTPUT -p tcp --dport 8080 -j ACCEPT
+}
+
+# Function to apply iptable default policy for INPUT and OUTPUT
+function apply_policy {
+  echo "Applying default INPUT/OUTPUT policies..."
+
+  if [[ "$inputdrop" == true ]]; then
+    iptables -P INPUT DROP
+  else
+    iptables -P INPUT ACCEPT
+  fi
+
+  if [[ "$outputdrop" == true ]]; then
+    iptables -P OUTPUT DROP
+  else
+    iptables -P OUTPUT ACCEPT
+  fi
+}
 
 # Function to add input rules based on listening ports and the user
 function get_listenports {
+	echo "Getting listening ports..."
 	# Get list of listening ports with name.
 	tmpport=$(netstat -vat | grep -i 0.0.0.0: | awk '{print $4}' | awk -F: '{print $2}')
 	ports=0
@@ -311,7 +368,7 @@ function get_listenports {
 # Checking what init system is used
 initsystem=$(get_initsystem)
 if [[ $initsystem == unknown ]]; then
-	echo "Unable to determine what init system is running exiting."
+	echo "Unable to determine what init system is running; exiting."
 	exit 100
 elif [[ $initsystem == upstart ]] ;then
 	echo "Init system is upstart."
@@ -326,4 +383,40 @@ else
 	exit 101
 fi
 
-create_restore_files_upstart
+# Load configuration
+load_conf
+
+# Get the listening ports
+if [[ "$getlisteningports" == true ]]; then
+  get_listenports
+fi
+
+# Add common rules
+if [[ "$addcommonrules" == true ]]; then
+  add_commonrules
+  if [[ "$addhttphttps" == true && "$outputdrop" == true ]]; then
+    add_httphttps_rules
+  fi
+fi
+
+# Add custom rules
+if [[ "$getlisteningports" == true ]]; then
+  add_ownrules
+fi
+
+# Apply INPUT/OUTPUT policy
+apply_policy
+
+# Create services
+if [[ $initsystem == upstart ]]; then
+  create_restore_files_systemd
+  init_sysmd_service
+elif [[ $initsystem == systemd ]]; then
+  create_restore_files_upstart
+fi
+
+echo "All done. Here are the iptables rules:"
+iptables -L INPUT
+iptables -L OUTPUT
+
+echo "Please note that any duplicated rules should be gone after a reboot."
