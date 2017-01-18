@@ -14,8 +14,8 @@ if [[ $EUID > 0 ]]; then
 fi
 
 # Making sure iptables are installed
-if ! hash iptables 2>/dev/null; then
-  echo "iptables not installed..."
+if ! hash nft 2>/dev/null; then
+  echo "nftables not installed..."
   exit 2
 fi
 
@@ -23,6 +23,7 @@ fi
 ################################
 # Variables
 ################################
+nfttablename="nfts"
 inputdrop=true
 outputdrop=true
 getlisteningports=true
@@ -30,11 +31,13 @@ addcommonrules=true
 addhttphttps=true
 sysmdfolder=/lib/systemd/system/
 sysmdservice=iptables-restore.service
+sysmdservice_nft=nftables-restore.service
 upsfolder=/etc/init/
 restorefile=/etc/iptables.save
-tmpfile=/tmp/iptables.save
+restorefile_nft=/etc/nftables.save
+# Variable not included in config file
 configfile="iptscript.conf"
-
+nftexec=$(whereis nft | awk {'print $2'})
 ###############################
 # Load variables from config file
 ###############################
@@ -56,8 +59,12 @@ if [[ -f $configfile ]]; then
 else
 	echo "Unable to find file... using values in script file..."
 fi
-# Define variable that include other variables
+# Define some variabled that use the other variables
+sysmdservice=$sysmdservice_nft
 sysmdfile=${sysmdfolder}${sysmdservice}
+nftin="nft add rule $nfttablename input"
+nftout="nft add rule $nfttablename output"
+restorefile=$restorefile_nft
 }
 ###############################
 # Function declaration
@@ -80,13 +87,13 @@ function create_restore_files_systemd {
 ###
 content="
 [Unit]
-Description=IPTABLES save and restore service
+Description=NFTABLES save and restore service
 After=network.target
 
 [Service]
 Type=simple
 RemainAfterExit=True
-ExecStart=/sbin/iptables-restore $restorefile
+ExecStart=$nftexec -f $restorefile
 ExecStop=$restorefile.sh $restorefile
 
 [Install]
@@ -102,17 +109,8 @@ WantedBy=multi-user.target"
 ###
 content="
 #!/bin/bash
-/sbin/iptables-save > $tmpfile
-newtxt=''
+$nftexec list ruleset > $restorefile
 
-while read p; do
-        if [[ \"\${newtxt#*\$p}\" == \"\$newtxt\" ]]; then
-                newtxt=\"\${newtxt}\${p}\n\"
-        fi
-done <$tmpfile
-
-echo -e \$newtxt > $restorefile
-rm $tmpfile
 chmod 600 $restorefile"
 ###
 
@@ -124,8 +122,8 @@ chmod 600 $restorefile"
 # Function to initialize systemd service
 function init_sysmd_service {
 
-  echo "Saving initial iptables restore file..."
-  iptables-save > $restorefile
+  echo "Saving initial nftables restore file..."
+  $nftexec list ruleset > $restorefile
   chmod 600 $restorefile
 
   echo "Enabling and starting restore service..."
@@ -140,85 +138,82 @@ function create_restore_files_upstart {
 
   echo "Creating save and restore scripts for Upstart."
   content="
-# iptables restore script
+# nftables restore script
 
-description     \"restore iptables saved rules\"
+description     \"restore nftables saved rules\"
 
 start on network or runlevel [2345]
 
-exec /sbin/iptables-restore $restorefile"
+exec $nftexec -f $restorefile"
 
-echo "${content}" > ${upsfolder}iptables-restore.conf
+echo "${content}" > ${upsfolder}nftables-restore.conf
 
   # Shutdown script
 
   content="
-# iptables save script
+# nftables save script
 
-description     \"save iptables rules\"
+description     \"save nftables rules\"
 
 start on runlevel [06]
 
-exec $restorefile.sh"
+script
+	$nftexec list ruleset > $restorefile
+	chmod 600 $restorefile
+end script"
 
-  echo "${content}" > ${upsfolder}iptables-save.conf
+  echo "${content}" > ${upsfolder}nftables-save.conf
 
-# Creating Bash file
-  content="#!/bin/bash
-/sbin/iptables-save > $tmpfile
-newtxt=''
-
-while read p; do
-        if [[ \"\${newtxt#*\$p}\" == \"\$newtxt\" ]]; then
-                newtxt=\"\${newtxt}\${p}\n\"
-        fi
-done <$tmpfile
-
-echo -e \$newtxt > $restorefile
-rm $tmpfile
-chmod 600 $restorefile"
-
-  echo "${content}" > $restorefile.sh
-  chmod 700 $restorefile.sh
 }
 
-# Function to add some common rules to iptables
+# Function to create the table and chains in nftables
+function init_nftable {
+  echo "Initilizing the table in nftables..."
+
+  # First try and delete the table if it already exists
+  nft delete table $nfttablename 2>/dev/null
+
+  # Add the table and then the two chains 'input' and 'output'
+  nft add table $nfttablename
+  nft add chain $nfttablename input \{ type filter hook input priority 0\; \}
+  nft add chain $nfttablename output \{ type filter hook output priority 0\; \}
+}
+
+# Function to add some common rules to nftables
 function add_commonrules {
   echo "Adding common rules..."
 
   if [[ "$inputdrop" == true ]]; then
     #Accept packets comming in on the loopback interface
-    iptables -A INPUT -i lo -j ACCEPT
+    $nftin input iif lo accept
     #Accept DNS lookup responces on udp
-    iptables -A INPUT -p udp --sport 53 -m state --state ESTABLISHED,RELATED -j ACCEPT
+    $nftin udp sport 53 ct state established,related accept
     #Reject new ICMP requests
-    iptables -A INPUT -p icmp --icmp-type echo-request -j REJECT --reject-with icmp-host-unreachable
+    $nftin icmp type echo-request reject with icmp type host-unreachable
     #Accept ICMP responces
-    iptables -A INPUT -p icmp --icmp-type echo-reply -m state --state ESTABLISHED,RELATED -j ACCEPT
-    #Accept established or related tcp packets
-    iptables -A INPUT -p tcp -m state --state ESTABLISHED,RELATED -j ACCEPT
+    $nftin icmp type echo-reply ct state established,related accept
+    #Accept established or related packets
+    $nftin ct state established,related accept
   elif [[ "$inputdrop" == false ]]; then
     #Drop new incoming tcp packets if they are not SYN
-    iptables -A INPUT -p tcp ! --syn -m state --state NEW -j DROP
-    #Drop fragmented packets
-    iptables -A INPUT -f -j DROP
+    $nftin tcp flags != syn ct state new drop
     #Drop malformed XMAS packets
-    iptables -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
+    $nftin tcp flags \& \(fin\|syn\|rst\|psh\|ack\|urg\) \> urg drop
     #Drop NULL packets
-    iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
+    $nftin tcp flags \& \(fin\|syn\|rst\|psh\|ack\|urg\) \< fin drop
     #Reject new ICMP requests
-    iptables -A INPUT -p icmp --icmp-type echo-request -j REJECT --reject-with icmp-host-unreachable
+    $nftin icmp type echo-request reject with host-unreachable
   fi
 
   if [[ "$outputdrop" == true ]]; then
     #Accept all packets on the loopback interface
-    iptables -A OUTPUT -o lo -j ACCEPT
+    $nftout oif lo accept
     #Accept DNS lookup requests on udp
-    iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+    $nftout udp dport 53 accept
     #Accept new ICMP requests
-    iptables -A OUTPUT -p icmp --icmp-type echo-request -j ACCEPT
+    $nftout icmp type echo-request accept
     #Accept all packets from established or related sessions
-    iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+    $nftout ct state established,related accept
   fi
 }
 
@@ -227,31 +222,31 @@ function add_ownrules {
   echo "Adding user defined rules..."
 
   for ((i=0; i<${#addport[@]}; i++)); do
-    iptables -A INPUT -p tcp --dport ${addport[$i]}  -s ${srcnet[$i]} -j ACCEPT
+    if [[ ${srcnet[$i]} == "any" ]]; then
+      $nftin tcp dport ${addport[$i]} accept
+    else
+      $nftin tcp dport ${addport[$i]} ip saddr ${srcnet[$i]} accept
+    fi
   done
 }
 # function to add OUTPUT rules to allow HTTP and HTTPS
 function add_httphttps_rules {
   echo "Adding HTTP and HTTPS OUTPUT rules..."
 
-  iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
-  iptables -A OUTPUT -p tcp --dport 8080 -j ACCEPT
+  $nftout tcp dport 80 accept
+  $nftout tco dport 8080 accept
 }
 
-# Function to apply iptable default policy for INPUT and OUTPUT
+# Function to apply default policy for INPUT and OUTPUT chains
 function apply_policy {
   echo "Applying default INPUT/OUTPUT policies..."
 
   if [[ "$inputdrop" == true ]]; then
-    iptables -P INPUT DROP
-  else
-    iptables -P INPUT ACCEPT
+    nft add chain $nfttablename input \{ type filter hook input priority 0 \; policy drop\; \}
   fi
 
   if [[ "$outputdrop" == true ]]; then
-    iptables -P OUTPUT DROP
-  else
-    iptables -P OUTPUT ACCEPT
+    nft add chain $nfttablename output \{ type filter hook output priority 0 \; policy drop\; \}
   fi
 }
 
@@ -284,7 +279,7 @@ function get_listenports {
 	while :
 	do
 		clear
-		echo "What input ports should be added to the iptables list?"
+		echo "What input ports should be added to the nftables rules?"
 		echo "Here are the ports currently listening for tcp connections:"
 		echo -e "Number: Service (Port)\t\tAdd\tSourcenetwork"
 		for ((i=1; i<$ports; i++)); do
@@ -303,6 +298,7 @@ function get_listenports {
 			if [[ $choise == $ports ]]; then
 				break
 			elif [ $choise -eq 0 ]; then
+				echo "New sevice. Please note that incorrect entrys may cause the script to fail..."
 				echo -n "Service (empty for 'Custom'): "
 				read name
 				if [ -z $name ]; then
@@ -311,8 +307,7 @@ function get_listenports {
 				echo -n "Port (1-65535): "
 				read port
 				if [ $port -ge 1 -a $port -le 65535 ]; then
-                                	echo "New sevice. Please note that incorrect entrys may cause the script to fail..."
-                                	echo -n "Source network (empty for 'any'): "
+				echo -n "Source network (empty for 'any'): "
 					read src
 					if [ -z $src ]; then
 						src="any"
@@ -327,8 +322,8 @@ function get_listenports {
 					((ports+=1)) # Increase the number of ports after adding
 				else
 					echo "Only a singel port between 1 and 65535 are allowed"
-                                        echo -n "Press enter to continue to the list..."
-                                        read foo
+					echo -n "Press enter to continue to the list..."
+					read foo
 				fi
 			else # Edit selected rule
 				echo -e "Service\t\tPort\tAdd\tSourcenetwork"
@@ -347,7 +342,7 @@ function get_listenports {
 						addport[$choise]="YES"
 					fi
 				elif [ $entry -eq 2 ]; then
-					echo "Please note that no check will be done on the entry so be sure that its a valid network."
+					echo "Please note that no check will be done on the entry, so be sure that it\'s a valid network."
 					echo "Blank entry to cancel."
 					echo ""
 					echo -n "New sourece network: "
@@ -399,6 +394,9 @@ if [[ "$getlisteningports" == true ]]; then
   get_listenports
 fi
 
+# Initilize the table and chains in nftables
+init_nftable
+
 # Add common rules
 if [[ "$addcommonrules" == true ]]; then
   add_commonrules
@@ -423,8 +421,7 @@ elif [[ $initsystem == systemd ]]; then
   create_restore_files_upstart
 fi
 
-echo "All done. Here are the iptables rules:"
-iptables -L INPUT
-iptables -L OUTPUT
+echo "All done. Here are the nftables rules:"
+nft list table $nfttablename
 
 echo "Please note that any duplicated rules should be gone after a reboot."
