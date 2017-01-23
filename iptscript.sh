@@ -38,7 +38,6 @@ configfile="iptscript.conf"
 ###############################
 # Load variables from config file
 ###############################
-function load_conf {
 if [[ -f $configfile ]]; then
         shopt -s extglob
         tr -d '\r' < $configfile > $configfile.unix
@@ -58,7 +57,7 @@ else
 fi
 # Define variable that include other variables
 sysmdfile=${sysmdfolder}${sysmdservice}
-}
+
 ###############################
 # Function declaration
 ###############################
@@ -87,7 +86,7 @@ After=network.target
 Type=simple
 RemainAfterExit=True
 ExecStart=/sbin/iptables-restore $restorefile
-ExecStop=$restorefile.sh $restorefile
+ExecStop=$restorefile.sh
 
 [Install]
 WantedBy=multi-user.target"
@@ -100,8 +99,7 @@ WantedBy=multi-user.target"
   echo "Creating BASH file..."
 
 ###
-content="
-#!/bin/bash
+content="#!/bin/bash
 /sbin/iptables-save > $tmpfile
 newtxt=''
 
@@ -391,8 +389,6 @@ else
 	exit 101
 fi
 
-# Load configuration
-load_conf
 
 # Get the listening ports
 if [[ "$getlisteningports" == true ]]; then
@@ -416,10 +412,10 @@ fi
 apply_policy
 
 # Create services
-if [[ $initsystem == upstart ]]; then
+if [[ $initsystem == systemd ]]; then
   create_restore_files_systemd
   init_sysmd_service
-elif [[ $initsystem == systemd ]]; then
+elif [[ $initsystem == upstart ]]; then
   create_restore_files_upstart
 fi
 

@@ -41,7 +41,6 @@ nftexec=$(whereis nft | awk {'print $2'})
 ###############################
 # Load variables from config file
 ###############################
-function load_conf {
 if [[ -f $configfile ]]; then
         shopt -s extglob
         tr -d '\r' < $configfile > $configfile.unix
@@ -65,7 +64,7 @@ sysmdfile=${sysmdfolder}${sysmdservice}
 nftin="nft add rule $nfttablename input"
 nftout="nft add rule $nfttablename output"
 restorefile=$restorefile_nft
-}
+
 ###############################
 # Function declaration
 ###############################
@@ -94,7 +93,8 @@ After=network.target
 Type=simple
 RemainAfterExit=True
 ExecStart=$nftexec -f $restorefile
-ExecStop=$restorefile.sh $restorefile
+ExecReload=$nftexec -f $restorefile
+ExecStop=$restorefile.sh
 
 [Install]
 WantedBy=multi-user.target"
@@ -107,9 +107,9 @@ WantedBy=multi-user.target"
   echo "Creating BASH file..."
 
 ###
-content="
-#!/bin/bash
-$nftexec list ruleset > $restorefile
+content="#!/bin/bash
+echo \"flush ruleset\" > $restorefile
+$nftexec list ruleset >> $restorefile
 
 chmod 600 $restorefile"
 ###
@@ -123,7 +123,8 @@ chmod 600 $restorefile"
 function init_sysmd_service {
 
   echo "Saving initial nftables restore file..."
-  $nftexec list ruleset > $restorefile
+  echo "flush ruleset" > $restorefile
+  $nftexec list ruleset >> $restorefile
   chmod 600 $restorefile
 
   echo "Enabling and starting restore service..."
@@ -158,7 +159,8 @@ description     \"save nftables rules\"
 start on runlevel [06]
 
 script
-	$nftexec list ruleset > $restorefile
+	echo \"flush ruleset\" > $restorefile
+	$nftexec list ruleset >> $restorefile
 	chmod 600 $restorefile
 end script"
 
@@ -185,7 +187,7 @@ function add_commonrules {
 
   if [[ "$inputdrop" == true ]]; then
     #Accept packets comming in on the loopback interface
-    $nftin input iif lo accept
+    $nftin iif lo accept
     #Accept DNS lookup responces on udp
     $nftin udp sport 53 ct state established,related accept
     #Reject new ICMP requests
@@ -234,7 +236,7 @@ function add_httphttps_rules {
   echo "Adding HTTP and HTTPS OUTPUT rules..."
 
   $nftout tcp dport 80 accept
-  $nftout tco dport 8080 accept
+  $nftout tcp dport 8080 accept
 }
 
 # Function to apply default policy for INPUT and OUTPUT chains
@@ -259,8 +261,6 @@ function get_listenports {
 	for pn in $tmpport; do
 		ports=$(($ports+1))
 		openpn[$ports]=$pn
-		addport[$ports]="YES"
-		srcnet[$ports]="any"
 
 	done
 
@@ -270,6 +270,8 @@ function get_listenports {
 	for pp in $tmpport; do
 		ports=$(($ports+1))
 		openpp[$ports]=$pp
+		addport[$ports]="YES"
+		srcnet[$ports]="any"
 	done
 
 	(( ports+=1 )) # Add one to ports since its used in the loop later
@@ -386,12 +388,10 @@ else
 	exit 101
 fi
 
-# Load configuration
-load_conf
-
 # Get the listening ports
 if [[ "$getlisteningports" == true ]]; then
   get_listenports
+  echo "###############################"
 fi
 
 # Initilize the table and chains in nftables
@@ -414,14 +414,13 @@ fi
 apply_policy
 
 # Create services
-if [[ $initsystem == upstart ]]; then
+if [[ $initsystem == systemd ]]; then
   create_restore_files_systemd
   init_sysmd_service
-elif [[ $initsystem == systemd ]]; then
+elif [[ $initsystem == upstart ]]; then
   create_restore_files_upstart
 fi
 
+echo "###############################"
 echo "All done. Here are the nftables rules:"
 nft list table $nfttablename
-
-echo "Please note that any duplicated rules should be gone after a reboot."
