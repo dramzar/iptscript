@@ -233,7 +233,7 @@ function add_httphttps_rules {
   echo "Adding HTTP and HTTPS OUTPUT rules..."
 
   iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
-  iptables -A OUTPUT -p tcp --dport 8080 -j ACCEPT
+  iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
 }
 
 # Function to apply iptable default policy for INPUT and OUTPUT

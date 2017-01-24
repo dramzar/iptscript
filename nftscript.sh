@@ -235,8 +235,7 @@ function add_ownrules {
 function add_httphttps_rules {
   echo "Adding HTTP and HTTPS OUTPUT rules..."
 
-  $nftout tcp dport 80 accept
-  $nftout tcp dport 8080 accept
+  $nftout tcp dport {80, 443} accept
 }
 
 # Function to apply default policy for INPUT and OUTPUT chains
